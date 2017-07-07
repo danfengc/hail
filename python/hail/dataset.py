@@ -550,7 +550,7 @@ class VariantDataset(object):
           - ``s`` (*String*): sample ID
           - ``sa``: sample annotations
         
-        **The ``root`` and ``expr`` arguments**
+        **The** ``root`` **and** ``expr`` **arguments**
         
         .. note::
         
@@ -1125,8 +1125,9 @@ class VariantDataset(object):
                       expr=strlike,
                       types=bool,
                       export_ref=bool,
-                      export_missing=bool)
-    def export_genotypes(self, output, expr, types=False, export_ref=False, export_missing=False):
+                      export_missing=bool,
+                      parallel=bool)
+    def export_genotypes(self, output, expr, types=False, export_ref=False, export_missing=False, parallel=False):
         """Export genotype-level information to delimited text file.
 
         **Examples**
@@ -1159,12 +1160,14 @@ class VariantDataset(object):
         :param bool export_ref: If true, export reference genotypes. Only applicable if the genotype schema is :py:class:`~hail.expr.TGenotype`.
 
         :param bool export_missing: If true, export missing genotypes.
+
+        :param bool parallel: If true, writes a set of files (one per partition) rather than serially concatenating these files.
         """
 
         if self._is_generic_genotype:
-            self._jvdf.exportGenotypes(output, expr, types, export_missing)
+            self._jvdf.exportGenotypes(output, expr, types, export_missing, parallel)
         else:
-            self._jvdf.exportGenotypes(output, expr, types, export_ref, export_missing)
+            self._jvdf.exportGenotypes(output, expr, types, export_ref, export_missing, parallel)
 
     @handle_py4j
     @requireTGenotype
@@ -1272,8 +1275,9 @@ class VariantDataset(object):
     @handle_py4j
     @typecheck_method(output=strlike,
                       expr=strlike,
-                      types=bool)
-    def export_variants(self, output, expr, types=False):
+                      types=bool,
+                      parallel=bool)
+    def export_variants(self, output, expr, types=False, parallel=False):
         """Export variant information to delimited text file.
 
         **Examples**
@@ -1351,9 +1355,11 @@ class VariantDataset(object):
         :param str expr: Export expression for values to export.
 
         :param bool types: Write types of exported columns to a file at (output + ".types")
+
+        :param bool parallel: If true, writes a set of files (one per partition) rather than serially concatenating these files.
         """
 
-        self._jvds.exportVariants(output, expr, types)
+        self._jvds.exportVariants(output, expr, types, parallel)
 
     @handle_py4j
     @typecheck_method(output=strlike,
@@ -2354,38 +2360,41 @@ class VariantDataset(object):
 
     @handle_py4j
     @requireTGenotype
-    def ld_matrix(self):
+    @typecheck_method(force_local=bool)
+    def ld_matrix(self, force_local=False):
         """Computes the linkage disequilibrium (correlation) matrix for the variants in this VDS.
-        
+
         **Examples**
-        
+
         >>> ld_mat = vds.ld_matrix()
-        
+
         **Notes**
-        
-        Each entry (i, j) in the LD matrix gives the :math:`r` value between variants i and j, defined as 
-        `Pearson's correlation coefficient <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient>`__ 
+
+        Each entry (i, j) in the LD matrix gives the :math:`r` value between variants i and j, defined as
+        `Pearson's correlation coefficient <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient>`__
         :math:`\\rho_{x_i,x_j}` between the two genotype vectors :math:`x_i` and :math:`x_j`.
 
         .. math::
 
             \\rho_{x_i,x_j} = \\frac{\\mathrm{Cov}(X_i,X_j)}{\\sigma_{X_i} \\sigma_{X_j}}
-        
-        Also note that variants with zero variance (:math:`\\sigma = 0`) will be dropped from the matrix. 
+
+        Also note that variants with zero variance (:math:`\\sigma = 0`) will be dropped from the matrix.
 
         .. caution::
 
-          The matrix returned by this function can easily be very large with most entries near zero
-          (for example, entries between variants on different chromosomes in a homogenous population).
-          Most likely you'll want to reduce the number of variants with methods like
-          :py:meth:`.sample_variants`, :py:meth:`.filter_variants_expr`, or :py:meth:`.ld_prune` before
-          calling this unless your dataset is very small.
+            The matrix returned by this function can easily be very large with most entries near zero
+            (for example, entries between variants on different chromosomes in a homogenous population).
+            Most likely you'll want to reduce the number of variants with methods like
+            :py:meth:`.sample_variants`, :py:meth:`.filter_variants_expr`, or :py:meth:`.ld_prune` before
+            calling this unless your dataset is very small.
+
+        :param bool force_local: If true, the LD matrix is computed using local matrix multiplication on the Spark driver. This may improve performance when the genotype matrix is small enough to easily fit in local memory. If false, the LD matrix is computed using distributed matrix multiplication if the number of genotypes exceeds :math:`5000^2` and locally otherwise.
 
         :return: Matrix of r values between pairs of variants.
         :rtype: :py:class:`LDMatrix`
         """
 
-        jldm = self._jvdf.ldMatrix()
+        jldm = self._jvdf.ldMatrix(force_local)
         return LDMatrix(jldm)
 
 
@@ -4228,9 +4237,10 @@ class VariantDataset(object):
         ... '(va.info.QD < 2.0 || va.info.FS < 200.0 || va.info.ReadPosRankSum < 20.0)) va.filters.add("HardFilter") else va.filters'])
 
         If we now export this VDS as VCF, it would produce the following header (for these new fields):
-        ```
-        ##INFO=<ID=AC_HC,Number=.,Type=String,Description=""
-        ```
+
+        .. code-block:: text
+
+            ##INFO=<ID=AC_HC,Number=.,Type=String,Description=""
 
         This header doesn't contain all information that should be present in an optimal VCF header:
         1) There is no FILTER entry for `HardFilter`
@@ -4238,15 +4248,22 @@ class VariantDataset(object):
         3) `AC_HC` should have a Description
 
         We can fix this by setting the attributes of these fields:
-        >>> annotated_vds = vds.set_va_attributes('va.info.AC_HC', {'Description':'Allele count for high quality genotypes (DP >= 10, GQ >= 20)',
-        ... 'Number': 'A'})
-        >>> annotated_vds = vds.set_va_attributes('va.filters', {'HardFilter': 'This site fails GATK suggested hard filters.'})
+
+        >>> annotated_vds = (annotated_vds
+        ...     .set_va_attributes(
+        ...         'va.info.AC_HC',
+        ...         {'Description': 'Allele count for high quality genotypes (DP >= 10, GQ >= 20)',
+        ...          'Number': 'A'})
+        ...     .set_va_attributes(
+        ...         'va.filters',
+        ...         {'HardFilter': 'This site fails GATK suggested hard filters.'}))
 
         Exporting the VDS with the attributes now prints the following header lines:
-        ```
-        ##INFO=<ID=test,Number=A,Type=String,Description="Allele count for high quality genotypes (DP >= 10, GQ >= 20)"
-        ##FILTER=<ID=HardFilter,Description="This site fails GATK suggested hard filters.">
-        ```
+
+        .. code-block:: text
+
+            ##INFO=<ID=test,Number=A,Type=String,Description="Allele count for high quality genotypes (DP >= 10, GQ >= 20)"
+            ##FILTER=<ID=HardFilter,Description="This site fails GATK suggested hard filters.">
 
         :param str ann_path: Path to variant annotation beginning with `va`.
 
@@ -4653,6 +4670,7 @@ class VariantDataset(object):
         - **hail.vep.location** -- Location of the VEP Perl script.  Required.
         - **hail.vep.cache_dir** -- Location of the VEP cache dir, passed to VEP with the `--dir` option.  Required.
         - **hail.vep.fasta** -- Location of the FASTA file to use to look up the reference sequence, passed to VEP with the `--fasta` option.  Required.
+        - **hail.vep.assembly** -- Genome assembly version to use. Optional, default: GRCh37
         - **hail.vep.plugin** -- VEP plugin, passed to VEP with the `--plugin` option.  Optional. Overrides `hail.vep.lof.human_ancestor` and `hail.vep.lof.conservation_file`.
         - **hail.vep.lof.human_ancestor** -- Location of the human ancestor file for the LOFTEE plugin.  Ignored if `hail.vep.plugin` is set. Required otherwise.
         - **hail.vep.lof.conservation_file** -- Location of the conservation file for the LOFTEE plugin.  Ignored if `hail.vep.plugin` is set. Required otherwise.
@@ -4682,9 +4700,9 @@ class VariantDataset(object):
             --no_stats
             --cache --offline
             --dir <hail.vep.cache_dir>
-            --fasta <hail.vep.cache_dir>/homo_sapiens/81_GRCh37/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa
+            --fasta <hail.vep.fasta>
             --minimal
-            --assembly GRCh37
+            --assembly <hail.vep.assembly>
             --plugin LoF,human_ancestor_fa:$<hail.vep.lof.human_ancestor>,filter_position:0.05,min_intron_size:15,conservation_file:<hail.vep.lof.conservation_file>
             -o STDOUT
 
@@ -4929,20 +4947,6 @@ class VariantDataset(object):
         """Produce a key with one row per variant and one or more columns per sample.
 
         **Examples**
-        
-        >>> kt = vds.make_table('v = v', ['gt = g.gt', 'gq = g.gq'])
-
-        **Notes**
-
-        Per sample field names in the result are formed by
-        concatenating the sample ID with the ``genotype_expr`` left
-        hand side with ``separator``.  If the left hand side is empty::
-
-          `` = expr
-
-        then the dot (.) is omitted.
-
-        **Examples**
 
         Consider a :py:class:`VariantDataset` ``vds`` with 2 variants and 3 samples:
 
@@ -4952,7 +4956,7 @@ class VariantDataset(object):
           1:1:A:T	GT:GQ	0/1:99	./.	0/0:99
           1:2:G:C	GT:GQ	0/1:89	0/1:99	1/1:93
 
-        Then:
+        Then
 
         >>> kt = vds.make_table('v = v', ['gt = g.gt', 'gq = g.gq'])
 
@@ -4968,13 +4972,25 @@ class VariantDataset(object):
             C.gt: Int
             C.gq: Int
 
-        in particular, the values would be
+        and values
 
         .. code-block:: text
 
             v	A.gt	A.gq	B.gt	B.gq	C.gt	C.gq
             1:1:A:T	1	99	NA	NA	0	99
             1:2:G:C	1	89	1	99	2	93
+
+        The above table can be generated and exported as a TSV using :class:`.KeyTable` :py:meth:`~hail.KeyTable.export`.
+
+        **Notes**
+
+        Per sample field names in the result are formed by
+        concatenating the sample ID with the ``genotype_expr`` left
+        hand side with ``separator``.  If the left hand side is empty::
+
+          `` = expr
+
+        then the dot (.) is omitted.
 
         :param variant_expr: Variant annotation expressions.
         :type variant_expr: str or list of str
@@ -4985,7 +5001,7 @@ class VariantDataset(object):
         :param key: List of key columns.
         :type key: str or list of str
 
-        :param str separator: Seperator to use between sample IDs and genotype expression left hand side identifiers.
+        :param str separator: Separator to use between sample IDs and genotype expression left-hand side identifiers.
 
         :rtype: :py:class:`.KeyTable`
 

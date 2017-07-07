@@ -186,8 +186,11 @@ case class KeyTable(hc: HailContext, rdd: RDD[Row],
   def nPartitions: Int = rdd.partitions.length
 
   def keySignature: TStruct = {
-    val keySet = key.toSet
-    TStruct(signature.fields.filter(f => keySet.contains(f.name)).map(f => (f.name, f.typ)): _*)
+    val types = fields.map(f => f.name -> f.typ).toMap
+    val keyFields = key
+      .map(k => k -> types(k))
+
+    TStruct(keyFields: _*)
   }
 
   def valueSignature: TStruct = {
@@ -212,9 +215,11 @@ case class KeyTable(hc: HailContext, rdd: RDD[Row],
     if (nKeys == 0)
       fatal("cannot produce a keyed RDD from a key table with no key columns")
 
-    val keySet = keyFields.map(_.name).toSet
-    val keyIndices = fields.filter(f => keySet.contains(f.name)).map(_.index)
-    val valueIndices = fields.filter(f => !keySet.contains(f.name)).map(_.index)
+    val fieldIndices = fields.map(f => f.name -> f.index).toMap
+
+    val keyIndices = key.map(fieldIndices)
+    val keyIndexSet = keyIndices.toSet
+    val valueIndices = fields.filter(f => !keyIndexSet.contains(f.index)).map(_.index)
     rdd.map { r => (Row.fromSeq(keyIndices.map(r.get)), Row.fromSeq(valueIndices.map(r.get))) }
   }
 
@@ -378,6 +383,18 @@ case class KeyTable(hc: HailContext, rdd: RDD[Row],
   def select(fieldsSelect: java.util.ArrayList[String], newKeys: java.util.ArrayList[String]): KeyTable =
     select(fieldsSelect.asScala.toArray, newKeys.asScala.toArray)
 
+  def drop(fieldsDrop: Array[String]): KeyTable = {
+    val fieldsNotExist = fieldsDrop.diff(fieldNames)
+    if (fieldsNotExist.nonEmpty)
+      fatal(s"Columns `${ fieldsNotExist.mkString(", ") }' do not exist in key table. Choose from `${ fieldNames.mkString(", ") }'.")
+
+    val fieldsSelect = fieldNames.diff(fieldsDrop)
+    val newKeys = key.diff(fieldsDrop)
+    select(fieldsSelect, newKeys)
+  }
+
+  def drop(fieldsDrop: java.util.ArrayList[String]): KeyTable = drop(fieldsDrop.asScala.toArray)
+
   def rename(fieldNameMap: Map[String, String]): KeyTable = {
     val newSignature = TStruct(signature.fields.map { fd => fd.copy(name = fieldNameMap.getOrElse(fd.name, fd.name)) })
     val newFieldNames = newSignature.fields.map(_.name)
@@ -495,7 +512,7 @@ case class KeyTable(hc: HailContext, rdd: RDD[Row],
     }
   }
 
-  def export(output: String, typesFile: String = null, header: Boolean = true) {
+  def export(output: String, typesFile: String = null, header: Boolean = true, parallel: Boolean = false) {
     val hConf = hc.hadoopConf
     hConf.delete(output, recursive = true)
 
@@ -517,7 +534,7 @@ case class KeyTable(hc: HailContext, rdd: RDD[Row],
 
         sb.result()
       }
-    }.writeTable(output, hc.tmpDir, Some(fields.map(_.name).mkString("\t")).filter(_ => header))
+    }.writeTable(output, hc.tmpDir, Some(fields.map(_.name).mkString("\t")).filter(_ => header), parallelWrite = parallel)
   }
 
   def aggregate(keyCond: String, aggCond: String): KeyTable = {

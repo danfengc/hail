@@ -184,13 +184,22 @@ object VariantSampleMatrix {
          """.stripMargin)
 
     val wasSplit = getAndCastJSON[JBool]("split").value
-    val isDosage = fields.get("isDosage") match {
-      case Some(t: JBool) => t.value
-      case Some(other) => fatal(
+    val isDosage = (fields.get("isDosage"), fields.get("isLinearScale")) match {
+      case (Some(t: JBool), None) => t.value
+      case (None, Some(t: JBool)) => t.value
+      case (Some(other), None) => fatal(
         s"""corrupt VDS: invalid metadata
            |  Expected `JBool' in field `isDosage', but got `${ other.getClass.getName }'
            |  Recreate VDS with current version of Hail.""".stripMargin)
-      case _ => false
+      case (None, Some(other)) => fatal(
+        s"""corrupt VDS: invalid metadata
+           |  Expected `JBool' in field `isLinearScale', but got `${ other.getClass.getName }'
+           |  Recreate VDS with current version of Hail.""".stripMargin)
+      case (Some(l), Some(r)) => fatal(
+        s"""corrupt VDS: invalid metadata
+           |  Cannot have fields for both `isDosage` and `isLinearScale'.'
+           |  Recreate VDS with current version of Hail.""".stripMargin)
+      case (None, None) => false
     }
 
     val parquetGenotypes = fields.get("parquetGenotypes") match {
@@ -1051,7 +1060,7 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VSMMetadata,
       }
   }
 
-  def exportGenotypes(path: String, expr: String, typeFile: Boolean, filterF: T => Boolean) {
+  def exportGenotypes(path: String, expr: String, typeFile: Boolean, filterF: T => Boolean, parallel: Boolean = false) {
     val symTab = Map(
       "v" -> (0, vSignature),
       "va" -> (1, vaSignature),
@@ -1087,7 +1096,7 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VSMMetadata,
           f().foreachBetween(x => sb.append(x))(sb += '\t')
           sb.result()
         }
-    }.writeTable(path, hc.tmpDir, names.map(_.mkString("\t")))
+    }.writeTable(path, hc.tmpDir, names.map(_.mkString("\t")), parallelWrite = parallel)
   }
 
   def exportSamples(path: String, expr: String, typeFile: Boolean = false) {
@@ -1121,7 +1130,7 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VSMMetadata,
     hadoopConf.writeTable(path, lines, names.map(_.mkString("\t")))
   }
 
-  def exportVariants(path: String, expr: String, typeFile: Boolean = false) {
+  def exportVariants(path: String, expr: String, typeFile: Boolean = false, parallel: Boolean = false) {
     val vas = vaSignature
     val hConf = hc.hadoopConf
 
@@ -1153,7 +1162,7 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VSMMetadata,
           f().foreachBetween(x => sb.append(x))(sb += '\t')
           sb.result()
         }
-      }.writeTable(path, hc.tmpDir, names.map(_.mkString("\t")))
+      }.writeTable(path, hc.tmpDir, names.map(_.mkString("\t")), parallelWrite = parallel)
   }
 
   def filterIntervals(intervals: java.util.ArrayList[Interval[Locus]], keep: Boolean): VariantSampleMatrix[T] = {

@@ -1,10 +1,12 @@
 package is.hail.io
 
+import breeze.linalg.DenseVector
 import is.hail.SparkSuite
 import is.hail.check.Gen._
 import is.hail.check.Prop._
 import is.hail.check.{Gen, Properties}
-import is.hail.io.bgen.BgenProbabilityIterator
+import is.hail.io.bgen.{BGen12ProbabilityArray, Bgen12GenotypeIterator}
+import is.hail.stats.RegressionUtils
 import is.hail.utils._
 import is.hail.variant._
 import org.testng.annotations.Test
@@ -12,6 +14,27 @@ import org.testng.annotations.Test
 import scala.io.Source
 import scala.language.postfixOps
 import scala.sys.process._
+
+class BgenProbabilityIterator(input: ByteArrayReader, nBitsPerProb: Int) extends HailIterator[UInt] {
+  val bitMask = (1L << nBitsPerProb) - 1
+  var data = 0L
+  var dataSize = 0
+
+  override def next(): UInt = {
+    while (dataSize < nBitsPerProb && input.hasNext()) {
+      data |= ((input.read() & 0xffL) << dataSize)
+      dataSize += 8
+    }
+    assert(dataSize >= nBitsPerProb, s"Data size `$dataSize' less than nBitsPerProb `$nBitsPerProb'.")
+
+    val result = data & bitMask
+    dataSize -= nBitsPerProb
+    data = data >>> nBitsPerProb
+    result.toUInt
+  }
+
+  override def hasNext: Boolean = input.hasNext() || (dataSize >= nBitsPerProb)
+}
 
 class LoadBgenSuite extends SparkSuite {
 
@@ -70,6 +93,14 @@ class LoadBgenSuite extends SparkSuite {
             case _ => false
           }
         }
+
+      val vdsFile = tmpDir.createTempFile("bgenImportWriteRead", "vds")
+      bgenVDS.write(vdsFile)
+      val bgenWriteVDS = hc.readVDS(vdsFile)
+      assert(bgenVDS
+        .filterVariantsExpr("va.rsid != \"RSID_100\"")
+        .same(bgenWriteVDS.filterVariantsExpr("va.rsid != \"RSID_100\"")
+        ), "Not same after write/read.")
 
       hadoopConf.delete(bgen + ".idx", recursive = true)
 
@@ -154,9 +185,9 @@ class LoadBgenSuite extends SparkSuite {
     Spec.check()
   }
 
-  def bitPack(input: Array[UInt], nBitsPerProb: Int): Array[Byte] = {
-    val expectedNBytes = (input.length * nBitsPerProb + 7) / 8
-    val packedInput = new Array[Byte](expectedNBytes)
+  def bitPack(input: Array[UInt], nSamples: Int, nBitsPerProb: Int): Array[Byte] = {
+    val expectedProbBytes = (input.length * nBitsPerProb + 7) / 8
+    val packedInput = new Array[Byte](nSamples + 10 + expectedProbBytes)
 
     val bitMask = (1L << nBitsPerProb) - 1
     var byteIndex = 0
@@ -168,7 +199,7 @@ class LoadBgenSuite extends SparkSuite {
       dataSize += nBitsPerProb
 
       while (dataSize >= 8) {
-        packedInput(byteIndex) = (data & 0xffL).toByte
+        packedInput(nSamples + 10 + byteIndex) = (data & 0xffL).toByte
         data = data >>> 8
         dataSize -= 8
         byteIndex += 1
@@ -176,33 +207,75 @@ class LoadBgenSuite extends SparkSuite {
     }
 
     if (dataSize > 0)
-      packedInput(byteIndex) = (data & 0xffL).toByte
+      packedInput(nSamples + 10 + byteIndex) = (data & 0xffL).toByte
 
     packedInput
   }
 
+  @Test def testDosage() {
+    val sc = hc.sc
+    hc.indexBgen("src/test/resources/example.8bits.bgen")
+    val vds = hc.importBgen("src/test/resources/example.8bits.bgen", nPartitions = Some(8))
+
+    val mask = Array.fill(vds.nSamples)(true)
+    val incompleteSampleIndices = Array(13, 172, 273, 319, 441)
+    for (i <- incompleteSampleIndices)
+      mask(i) = false
+
+    val nKept = vds.nSamples - incompleteSampleIndices.length
+    val maskBc = sc.broadcast(mask)
+
+    val completeSampleIndices = (0 until vds.nSamples)
+      .filter(mask)
+      .toArray
+    assert(completeSampleIndices.length == nKept)
+    val completeSampleIndicesBc = sc.broadcast(completeSampleIndices)
+
+    vds.rdd.foreachPartition { it =>
+      val missingSamples = new ArrayBuilder[Int]()
+      val dosages2 = new DenseVector[Double](nKept)
+
+      it.foreach { case (v, (va, gs)) =>
+        val dosages1 = RegressionUtils.dosages(gs, nKept, maskBc.value)
+
+        gs.asInstanceOf[Bgen12GenotypeIterator].dosages(dosages2, completeSampleIndicesBc.value, missingSamples)
+        
+        for (i <- 0 until nKept)
+          simpleAssert(dosages1(i) - dosages2(i) < 1e-3)
+      }
+    }
+  }
+
   object TestProbIterator extends Properties("ImportBGEN") {
-    val probIteratorGen = for (nBitsPerProb <- Gen.choose(1, 32);
-      nProbabilities <- Gen.choose(1, 20);
-      size = ((1L << nBitsPerProb) - 1).toUInt;
-      input <- Gen.partition(nProbabilities, size)
-    ) yield (nBitsPerProb, input)
+    val probIteratorGen = for (
+      nBitsPerProb <- Gen.choose(1, 32);
+      nSamples <- Gen.choose(1, 5);
+      nGenotypes <- Gen.choose(3, 5);
+      nProbabilities = nSamples * (nGenotypes - 1);
+      totalProb = ((1L << nBitsPerProb) - 1).toUInt;
+      sampleProbs <- Gen.buildableOfN[Array, Array[UInt]](nSamples, Gen.partition(nGenotypes - 1, totalProb));
+      input = sampleProbs.flatten
+    ) yield (nBitsPerProb, nSamples, nGenotypes, input)
 
-    property("bgen probability iterator gives correct result") =
-      forAll(probIteratorGen) { case (nBitsPerProb, input) =>
-        val packedInput = bitPack(input, nBitsPerProb)
-        val probIterator = new BgenProbabilityIterator(new ByteArrayReader(packedInput), nBitsPerProb)
-        val result = new Array[UInt](input.length)
+    property("bgen probability iterator, array give correct result") =
+      forAll(probIteratorGen) { case (nBitsPerProb, nSamples, nGenotypes, input) =>
+        assert(input.length == nSamples * (nGenotypes - 1))
+        val packedInput = bitPack(input, nSamples, nBitsPerProb)
+        val reader = new ByteArrayReader(packedInput)
+        reader.seek(nSamples + 10)
+        val probIter = new BgenProbabilityIterator(reader, nBitsPerProb)
+        val probArr = new BGen12ProbabilityArray(packedInput, nSamples, nGenotypes, nBitsPerProb)
 
-        for (i <- input.indices) {
-          if (probIterator.hasNext) {
-            result(i) = probIterator.next()
-          } else {
-            fatal(s"Should have at least ${ input.length } probabilities. Found i=$i")
+        for (s <- 0 until nSamples)
+          for (i <- 0 until (nGenotypes - 1)) {
+            val expected = input(s * (nGenotypes - 1) + i)
+            assert(probIter.hasNext)
+            assert(probIter.next() == expected)
+            assert(probArr(s, i) == expected)
           }
-        }
+        assert(!probIter.hasNext)
 
-        input sameElements result
+        true
       }
   }
 
@@ -216,5 +289,15 @@ class LoadBgenSuite extends SparkSuite {
 
     hc.indexBgen(bgen)
     hc.importBgen(bgen, Option(sample)).count()
+  }
+
+  @Test def testReIterate() {
+    hc.indexBgen("src/test/resources/example.v11.bgen")
+    val vds = hc.importBgen("src/test/resources/example.v11.bgen", Some("src/test/resources/example.sample"))
+
+    assert(vds.annotateVariantsExpr("va.cr1 = gs.fraction(g => g.isCalled())")
+      .annotateVariantsExpr("va.cr2 = gs.fraction(g => g.isCalled())")
+      .variantsKT()
+      .forall("va.cr1 == va.cr2"))
   }
 }

@@ -206,6 +206,30 @@ class ExprSuite extends SparkSuite {
     assert(eval[Boolean]("1.0 // -2.0 == -1.0").contains(true))
     assert(eval[Boolean]("-1.0 // -2.0 == 0.0").contains(true))
 
+    assert(eval[Double]("0 / 0").forall(_.isNaN))
+    assert(eval[Double]("0.0 / 0.0").forall(_.isNaN))
+    assert(eval[Double]("0 / 0 + 1").forall(_.isNaN))
+    assert(eval[Double]("0.0 / 0.0 + 1").forall(_.isNaN))
+    assert(eval[Double]("0 / 0 * 1").forall(_.isNaN))
+    assert(eval[Double]("0.0 / 0.0 * 1").forall(_.isNaN))
+    assert(eval[Double]("1 / 0").contains(Double.PositiveInfinity))
+    assert(eval[Double]("1.0 / 0.0").contains(Double.PositiveInfinity))
+    assert(eval[Double]("-1 / 0").contains(Double.NegativeInfinity))
+    assert(eval[Double]("-1.0 / 0.0").contains(Double.NegativeInfinity))
+    // NB: the -0 is parsed as the zero integer, which is converted to +0.0
+    assert(eval[Double]("1 / -0").contains(Double.PositiveInfinity))
+    assert(eval[Double]("1.0 / -0.0").contains(Double.NegativeInfinity))
+    assert(eval[Double]("0/0 * 1/0").forall(_.isNaN))
+    assert(eval[Double]("0.0/0.0 * 1.0/0.0").forall(_.isNaN))
+    for { x <- Array("-1.0/0.0", "-1.0", "0.0", "1.0", "1.0/0.0") } {
+      assert(eval[Boolean](s"0.0/0.0 < $x").contains(false))
+      assert(eval[Boolean](s"0.0/0.0 <= $x").contains(false))
+      assert(eval[Boolean](s"0.0/0.0 > $x").contains(false))
+      assert(eval[Boolean](s"0.0/0.0 >= $x").contains(false))
+      assert(eval[Boolean](s"0.0/0.0 == $x").contains(false))
+      assert(eval[Boolean](s"0.0/0.0 != $x").contains(true))
+    }
+
     assert(eval[Boolean]("isMissing(gs.noCall.gt)").contains(true))
     assert(eval[Boolean]("gs.noCall.gt").isEmpty)
 
@@ -917,6 +941,10 @@ class ExprSuite extends SparkSuite {
 
     assert(eval("Dict([1,2,3], [1,2,3])").contains(Map(1 -> 1, 2 -> 2, 3 -> 3)))
     assert(eval("""Dict(["foo", "bar"], [1,2])""").contains(Map("foo" -> 1, "bar" -> 2)))
+
+    assert(eval("isnan(0/0)").contains(true))
+    assert(eval("isnan(0)").contains(false))
+    assert(eval("isnan(NA: Int)").isEmpty)
   }
 
   @Test def testParseTypes() {

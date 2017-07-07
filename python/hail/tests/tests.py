@@ -343,6 +343,7 @@ class ContextTests(unittest.TestCase):
         vds_kinship = vds_assoc.filter_variants_expr('v.start < 4')
 
         km = vds_kinship.rrm(False, False)
+        ldMatrix = vds_kinship.ld_matrix()
         vds_assoc = vds_assoc.lmmreg(km, 'sa.pheno.PhenoLMM', ['sa.cov.Cov1', 'sa.cov.Cov2'])
 
         vds_assoc.export_variants('/tmp/lmmreg.tsv', 'Variant = v, va.lmmreg.*')
@@ -458,8 +459,11 @@ class ContextTests(unittest.TestCase):
         kt.rename(["Field1", "Field2", "Field3"])
         kt.rename([name + "_a" for name in kt.columns])
 
-        kt.select(["Sample"])
+        kt.select("Sample")
         kt.select(["Sample", "Status"])
+
+        kt.drop("Sample")
+        kt.drop(["Sample", "Status"])
 
         kt.key_by(['Sample', 'Status'])
         kt.key_by([])
