@@ -54,7 +54,7 @@ object RegressionUtils {
   // mask == null is interpreted as no mask
   // impute uses mean for missing dosage rather than Double.NaN
   def dosages(gs: Iterable[Genotype], nKept: Int, mask: Array[Boolean] = null, impute: Boolean = true): DenseVector[Double] = {
-    val gts = gs.dosageIterator
+    val gts: HailIterator[Double] = gs.dosageIterator
     val vals = Array.ofDim[Double](nKept)
     val missingRows = new ArrayBuilder[Int]()
     var i = 0
@@ -208,7 +208,7 @@ object RegressionUtils {
 
     val nCovs = covExpr.size + 1 // intercept
 
-    val symTab = Map(
+    val symTab: Map[String, (Int, Type)] = Map(
       "s" -> (0, TString),
       "sa" -> (1, vds.saSignature))
 
@@ -217,7 +217,7 @@ object RegressionUtils {
     val yIS = getSampleAnnotation(vds, yExpr, ec)
     val covIS = getSampleAnnotations(vds, covExpr, ec)
 
-    val (yForCompleteSamples, covForCompleteSamples, completeSamples) =
+    val (yForCompleteSamples: IndexedSeq[Option[Double]], covForCompleteSamples: IndexedSeq[Array[Option[Double]]], completeSamples) =
       (yIS, covIS, vds.sampleIds)
         .zipped
         .filter((y, c, s) => y.isDefined && c.forall(_.isDefined))
@@ -231,7 +231,7 @@ object RegressionUtils {
       fatal(s"Constant phenotype: all complete samples have phenotype ${ yArray(0) }")
     val y = DenseVector(yArray)
 
-    val covArray = covForCompleteSamples.flatMap(1.0 +: _.map(_.get)).toArray
+    val covArray: Array[Double] = covForCompleteSamples.flatMap(1.0 +: _.map(_.get)).toArray
     val cov = new DenseMatrix(rows = n, cols = nCovs, data = covArray, offset = 0, majorStride = nCovs, isTranspose = true)
 
     if (n < vds.nSamples)

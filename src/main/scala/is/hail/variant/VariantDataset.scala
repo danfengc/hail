@@ -611,6 +611,53 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     LogisticRegressionBurden(vds, keyName, variantKeys, singleKey, aggExpr, test, y, covariates)
   }
 
+  def fst(subpop: String, root: String = "va.fst"): VariantSampleMatrix[Genotype] = {
+    requireSplit("fst calculation")
+    Fst(vds, subpop, root)
+  }
+
+  def kmeans(covariates: Array[String], rootSA: String = "sa.kmeans", rootGA: String = "global.kmeans", N: Int = -9, max_N: Int = 10) = {
+    requireSplit("KMeans clustering")
+    val (k, assignments, clusterCenters) = Kmeans(vds, covariates, N, max_N)
+
+    var ret = vds.annotateSamples(assignments, Kmeans.saSignature, rootSA)
+    val globalSignature = Kmeans.clusterCenterSignature(k)
+
+    ret = ret.annotateGlobal(Annotation.fromSeq(clusterCenters.map(Kmeans.makeAnnotation)), globalSignature, rootGA)
+  }
+
+
+  def pcaWithOutlierRemoval(k: Int,
+            scoresRoot: String = "sa.scores",
+            loadingsRoot: Option[String] = None,
+            eigenRoot: Option[String] = None,
+            minKeep: Option[Double] = None): VariantSampleMatrix[Genotype] = {
+
+      if (k < 1)
+        fatal(
+          s"""requested invalid number of components: $k
+             |  Expect componenents >= 1""".stripMargin)
+
+      info(s"Running PCA with $k components...")
+
+      val pcSchema = PCA.pcSchema(k)
+
+      val (scores, loadings, eigenvalues) =
+        PCA.apply(vds, k, loadingsRoot.isDefined, eigenRoot.isDefined, minKeep)
+
+      var ret = vds.annotateSamples(scores, pcSchema, scoresRoot)
+
+      loadings.foreach { rdd =>
+        ret = ret.annotateVariants(rdd.orderedRepartitionBy(vds.rdd.orderedPartitioner), pcSchema, loadingsRoot.get)
+      }
+
+      eigenvalues.foreach { (eig: Annotation) =>
+        ret = ret.annotateGlobal(eig, pcSchema, eigenRoot.get)
+      }
+      ret
+
+  }
+
   def makeSchemaForKudu(): StructType =
     makeSchema(parquetGenotypes = false).add(StructField("sample_group", StringType, nullable = false))
 
@@ -644,7 +691,7 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
     val pcSchema = SamplePCA.pcSchema(asArrays, k)
 
-    val (scores, loadings, eigenvalues) =
+    val (scores, loadings: Option[RDD[(Variant, Annotation)]], eigenvalues: Option[Annotation]) =
       SamplePCA(vds, k, loadingsRoot.isDefined, eigenRoot.isDefined, asArrays)
 
     var ret = vds.annotateSamples(scores, pcSchema, scoresRoot)
@@ -653,7 +700,7 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
       ret = ret.annotateVariants(rdd.orderedRepartitionBy(vds.rdd.orderedPartitioner), pcSchema, loadingsRoot.get)
     }
 
-    eigenvalues.foreach { eig =>
+    eigenvalues.foreach { (eig: Annotation) =>
       ret = ret.annotateGlobal(eig, pcSchema, eigenRoot.get)
     }
     ret

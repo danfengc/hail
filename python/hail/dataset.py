@@ -2388,6 +2388,42 @@ class VariantDataset(object):
         jldm = self._jvdf.ldMatrix()
         return LDMatrix(jldm)
 
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(subpop=strlike,
+                      root=strlike)
+    def fst(self, subpop, root='va.fst'):
+        jvds = self._jvdf.fst(subpop, root)
+        return VariantDataset(self.hc, jvds)
+
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(covariates=listof(strlike),
+                      rootSA=strlike,
+                      rootGA=strlike,
+                      n=integral,
+                      max_n=integral)
+    def kmeans(self, covariates=[], rootSA='sa.kmeans',rootGA='global.kmeans', n=-9, max_n=10):
+        jvds = self._jvdf.kmeans(jarray(Env.jvm().java.lang.String, covariates), rootSA, rootGA, n, max_n)
+        return VariantDataset(self.hc, jvds)
+
+
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(k=integral,
+                  scores=strlike,
+                  loadings=nullable(strlike),
+                  eigenvalues=nullable(strlike),
+                  min_keep=nullable(numeric))
+
+    def pca_with_outlier_removal(self, k=10, scores="sa.scores", loadings=None, eigenvalues=None, min_keep=None):
+        jvds = self._jvdf.pca_WithOutlierRemoval(k, scores, joption(loadings), joption(eigenvalues), joption(min_keep))
+        return VariantDataset(self.hc, jvds)
+
+
     @handle_py4j
     @requireTGenotype
     @typecheck_method(y=strlike,

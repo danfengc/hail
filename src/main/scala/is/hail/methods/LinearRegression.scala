@@ -18,8 +18,8 @@ object LinearRegression {
   def apply(vds: VariantDataset, yExpr: String, covExpr: Array[String], root: String, useDosages: Boolean, minAC: Int, minAF: Double): VariantDataset = {
     require(vds.wasSplit)
 
-    val (y, cov, completeSamples) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
-    val sampleMask = vds.sampleIds.map(completeSamples.toSet).toArray
+    val (y, cov: DenseMatrix[Double], completeSamples: IndexedSeq[Annotation]) = RegressionUtils.getPhenoCovCompleteSamples(vds, yExpr, covExpr)
+    val sampleMask: Array[Boolean] = vds.sampleIds.map(completeSamples.toSet).toArray
 
     val n = y.size
     val k = cov.cols
