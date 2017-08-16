@@ -2,6 +2,7 @@ package is.hail.variant
 
 import java.io.FileNotFoundException
 
+
 import is.hail.HailContext
 import is.hail.annotations._
 import is.hail.expr._
@@ -308,6 +309,63 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     writeGenFile()
   }
 
+  def adaptivepca(p: Int,
+                  maxLeafSize: Int,
+                  r2Threshold: Double = 0.5,
+                  minMaf: Double = 0.01,
+                  windowSize: Int = 10000,
+                  outlierThold: Option[Double] = None,
+                  maxIter: Option[Int] = None,
+                  outputRoot: Option[String] = None,
+                  saveScore: Boolean = false): (AdaptivepcaBuilder, SparseTreeBasedCov) = {
+
+    var pruned = vds.ldPrune(r2Threshold, windowSize)
+    pruned = pruned.filterVariants { case (v, va, gs) => {
+      val gts = gs.hardCallIterator
+      var sum = 0
+      var count = 0
+      while (gts.hasNext) {
+        val gt = gts.next
+        if (gt != -1) {
+          sum += gt
+          count += 1
+        }
+      }
+      val p = if (count == 0) 0.0 else sum / (2 * count.toDouble)
+      p > minMaf
+      }
+    }
+    val retval = AdaptivePCA(pruned, p, maxLeafSize, outlierThold, maxIter, outputRoot, saveScore)
+    (retval._1, retval._2)
+  }
+
+
+  def treeCovLinearRegression(p: Int,
+                              maxLeafSize: Int,
+                              yExpr: String,
+                              saRoot: String,
+                              vaRoot: String,
+                              r2Threshold: Double = 0.5,
+                              minMaf: Double = 0.01,
+                              windowSize: Int = 10000,
+                              outlierThold: Option[Double] = None,
+                              maxIter: Option[Int] = None,
+                              outputRoot: Option[String] = None,
+                              saveScore: Boolean = false) = {
+    val (adaptivePCAResult, sparseTreeCov) = adaptivepca(p,
+                                                         maxLeafSize,
+                                                         r2Threshold,
+                                                         minMaf,
+                                                         windowSize,
+                                                         outlierThold,
+                                                         maxIter,
+                                                         outputRoot,
+                                                         saveScore)
+    val ret = TreeBasedLinearRegression(vds, yExpr, saRoot, vaRoot, sparseTreeCov)
+    (ret, adaptivePCAResult)
+  }
+
+
   def exportGenotypes(path: String, expr: String, typeFile: Boolean,
     printRef: Boolean = false, printMissing: Boolean = false, parallel: Boolean = false) {
 
@@ -613,7 +671,7 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
   def fst(subpop: String, root: String = "va.fst"): VariantSampleMatrix[Genotype] = {
     requireSplit("fst calculation")
-    Fst(vds, subpop, root)
+    ComputeFst(vds, subpop, root)
   }
 
   def kmeans(covariates: Array[String], rootSA: String = "sa.kmeans", rootGA: String = "global.kmeans", N: Int = -9, max_N: Int = 10) = {
@@ -627,36 +685,9 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
   }
 
 
-  def pcaWithOutlierRemoval(k: Int,
-            scoresRoot: String = "sa.scores",
-            loadingsRoot: Option[String] = None,
-            eigenRoot: Option[String] = None,
-            minKeep: Option[Double] = None): VariantSampleMatrix[Genotype] = {
+  def simpleBinomRegression(adaptivepca: AdaptivepcaBuilder, outputRootOpt: Option[String] = None) = SimpleBinomRegression(vds, adaptivepca, outputRootOpt)
 
-      if (k < 1)
-        fatal(
-          s"""requested invalid number of components: $k
-             |  Expect componenents >= 1""".stripMargin)
-
-      info(s"Running PCA with $k components...")
-
-      val pcSchema = PCA.pcSchema(k)
-
-      val (scores, loadings, eigenvalues) =
-        PCA.apply(vds, k, loadingsRoot.isDefined, eigenRoot.isDefined, minKeep)
-
-      var ret = vds.annotateSamples(scores, pcSchema, scoresRoot)
-
-      loadings.foreach { rdd =>
-        ret = ret.annotateVariants(rdd.orderedRepartitionBy(vds.rdd.orderedPartitioner), pcSchema, loadingsRoot.get)
-      }
-
-      eigenvalues.foreach { (eig: Annotation) =>
-        ret = ret.annotateGlobal(eig, pcSchema, eigenRoot.get)
-      }
-      ret
-
-  }
+  def project(inputDir: String, branch: String = "root", outputRoot: Option[String] = None) = Project(vds, inputDir, branch, outputRoot)
 
   def makeSchemaForKudu(): StructType =
     makeSchema(parquetGenotypes = false).add(StructField("sample_group", StringType, nullable = false))

@@ -13,6 +13,8 @@ class TreeNode(branchTag: String) extends Serializable with Cloneable { outer =>
 
   protected var children: ArrayBuffer[TreeNode] = ArrayBuffer.empty[TreeNode]
 
+  def getTreePath: String = this.branchTag
+
   def getAbsTreePath: String = {
     val parent = getParent
     parent match {
@@ -20,7 +22,6 @@ class TreeNode(branchTag: String) extends Serializable with Cloneable { outer =>
       case aNode: TreeNode => aNode.getAbsTreePath + "." + branchTag
     }
   }
-
 
   def getChildren: Iterator[TreeNode] =
     if (children.isEmpty)

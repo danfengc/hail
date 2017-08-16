@@ -15,7 +15,7 @@ import scala.collection.mutable
   */
 
 
-object Fst {
+object ComputeFst {
   val signature =
     TStruct(("Maf",TDouble), ("Fst", TDouble))
 
@@ -124,7 +124,7 @@ object Fst {
     val maskBc = sc.broadcast(sampleMask)
 
     val pathVA = Parser.parseAnnotationRoot(root, Annotation.VARIANT_HEAD)
-    val (newVAS, inserter) = vds.insertVA(Fst.signature, pathVA)
+    val (newVAS, inserter) = vds.insertVA(ComputeFst.signature, pathVA)
 
     vds.mapAnnotations { case (v, va, gs) =>
 

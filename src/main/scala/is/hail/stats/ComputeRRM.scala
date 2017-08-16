@@ -3,8 +3,7 @@ package is.hail.stats
 
 import breeze.linalg.DenseMatrix
 import is.hail.utils._
-
-import is.hail.variant.{Variant, VariantDataset}
+import is.hail.variant.{Genotype, Variant, VariantDataset}
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.{Matrices, Matrix, Vectors}
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix, RowMatrix}
@@ -105,6 +104,27 @@ object ToHWENormalizedIndexedRowMatrix {
         RegressionUtils.normalizedHardCalls(gs, n, useHWE = true, variants.size).getOrElse(Array.ofDim[Double](n))))
     }
 
+    (variants, new IndexedRowMatrix(mat.cache(), variants.size, n))
+  }
+
+}
+
+object ToHWENormalizedIndexedRowMatrixWithMaf {
+  def apply(vds: VariantDataset, variantMap: Map[Variant, Double]): (Array[Variant], IndexedRowMatrix) = {
+    val variants = vds.variants.collect()
+    val variantIdx = variantMap.keys.toArray.index
+
+    require(vds.wasSplit)
+
+    val n = vds.nSamples
+    val variantIdxBc = vds.sparkContext.broadcast(variantIdx)
+    val variantMapBc = vds.sparkContext.broadcast(variantMap)
+
+    val mat = vds.rdd.map { case (v: Variant, (va: Any, gs: Iterable[Genotype])) =>
+      val p = variantMapBc.value(v)
+      IndexedRow(variantIdxBc.value(v), Vectors.dense(
+        RegressionUtils.normalizedHardCallsWithMaf(gs, p, n, useHWE = true, variants.size)))
+    }
     (variants, new IndexedRowMatrix(mat.cache(), variants.size, n))
   }
 

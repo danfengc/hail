@@ -35,8 +35,9 @@ object PCA {
             k: Int,
             computeLoadings: Boolean,
             computeEigenvalues: Boolean,
-            outlierThold: Double = 1.0): (Map[Annotation, Annotation], Option[RDD[(Variant, Annotation)]], Option[Annotation]) = {
+            outlierTholdOpt: Option[Double] = None): (Map[Annotation, Annotation], Option[RDD[(Variant, Annotation)]], Option[Annotation]) = {
 
+      val outlierThold = if (! outlierTholdOpt.isDefined) 1.0 else outlierTholdOpt.get
       if (outlierThold < 0.0)
         fatal(s"outlier threshold should be no less than 0.0")
 
@@ -49,12 +50,12 @@ object PCA {
       }
 
       else {
-        fatal(s" perform sample PCA with outlier removal, threshold is set to be ${outlierThold}")
-        val (tmpScores, _, _) = SamplePCA(vds, k, false, false, true)
+        info(s" perform sample PCA with outlier removal, threshold is set to be ${outlierThold}")
+        val (tmpScores: Map[Annotation, Annotation], _, _) = SamplePCA(vds, k, false, false, true)
 
         val scores = {
           val scores = vds.sampleIds.map(s =>
-              tmpScores.get(s).asInstanceOf[IndexedSeq[Double]]
+              tmpScores(s).asInstanceOf[IndexedSeq[Double]]
           )
           val nrow = scores.length
           new DenseMatrix(nrow, k, scores.transpose.flatten.toArray)
@@ -68,7 +69,7 @@ object PCA {
         val cutoff = quantile(distance.data, outlierThold)
 
         val keepIndex = distance.findAll(d => d <= cutoff)
-        val removeIndex = distance.findAll(d => d <= cutoff)
+        val removeIndex = distance.findAll(d => d > cutoff)
         info(
           s"""number of samples in original dataset is ${vds.nSamples},
              |number of samples got removed is ${removeIndex.length},

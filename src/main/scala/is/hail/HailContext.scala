@@ -9,7 +9,7 @@ import is.hail.io.gen.{GenLoader, GenReport}
 import is.hail.io.plink.{FamFileConfig, PlinkLoader}
 import is.hail.io.vcf._
 import is.hail.keytable.KeyTable
-import is.hail.methods.DuplicateReport
+import is.hail.methods.{DuplicateReport, SimpleBinomRegressionInference}
 import is.hail.stats.{BaldingNicholsModel, Distribution, UniformDist}
 import is.hail.utils.{log, _}
 import is.hail.variant.{GenericDataset, Genotype, VSMFileMetadata, VSMSubgen, Variant, VariantDataset, VariantSampleMatrix}
@@ -204,6 +204,14 @@ class HailContext private(val sc: SparkContext,
   val hadoopConf: hadoop.conf.Configuration = sc.hadoopConfiguration
 
   def version: String = is.hail.HAIL_PRETTY_VERSION
+
+
+  def inference(projectRoot: String, estAndCovarianceRoot: String, outputpath: String): DataFrame = {
+    val dat = SimpleBinomRegressionInference(this, projectRoot, estAndCovarianceRoot)
+    dat.write.parquet(outputpath)
+    dat
+  }
+
 
   def grep(regex: String, files: Seq[String], maxLines: Int = 100) {
     val regexp = regex.r

@@ -2,18 +2,20 @@ package is.hail.methods.UNICORN_
 
 import breeze.linalg._
 import breeze.numerics._
+import breeze.linalg.operators
 import breeze.stats.distributions.Binomial
 import is.hail.annotations.Annotation
 import is.hail.expr._
 
-/**
-  * Created by danfengc on 6/30/17.
-  */
+
+
+
+
 class BinomRegressionModel(X: DenseMatrix[Double], y: DenseVector[Double]) {
 
   require(y.length == X.rows)
   require(y.forall(yi => yi == 0 || yi == 1 || yi == 2))
-  require{ val sumY = sum(y); sumY > 0 && sumY < 2 * y.length }
+  require({val sumY = sum(y); sumY > 0 && sumY < 2 * y.length})
 
   val n: Int = X.rows
   val m: Int = X.cols
@@ -25,7 +27,7 @@ class BinomRegressionModel(X: DenseMatrix[Double], y: DenseVector[Double]) {
     b
   }
 
-  def fit(optNullFit: Option[BinomRegressionFit] = None, maxIter: Int = 25, tol: Double = 1E-6):BinomRegressionFit = {
+  def fit(optNullFit: Option[BinomRegressionFit] = None, maxIter: Int = 25, tol: Double = 1E-9): BinomRegressionFit = {
 
     val b = DenseVector.zeros[Double](m)
     val mu = DenseVector.zeros[Double](n)
@@ -36,8 +38,8 @@ class BinomRegressionModel(X: DenseMatrix[Double], y: DenseVector[Double]) {
       case None =>
         b := bInterceptOnly()
         mu := sigmoid(X * b)
-        score := X.t * (y - (mu :* 2))
-        fisher := X.t * (X(::, *) :* (mu :* (1d - mu))) :* 2
+        score := X.t * (y - (mu :* 2.0))
+        fisher := (X.t * (X(::, *) :* (mu :* (1d - mu)))) :* 2.0
       case Some(nullFit) =>
         val m0 = nullFit.b.length
 
@@ -49,12 +51,12 @@ class BinomRegressionModel(X: DenseMatrix[Double], y: DenseVector[Double]) {
 
         b(r0) := nullFit.b
         mu := sigmoid(X * b)
-        score(r0) := nullFit.score.get
-        score(r1) := X1.t * (y - (mu :* 2))
-        fisher(r0, r0) := nullFit.fisher.get
-        fisher(r0, r1) := X0.t * (X1(::, *) :* (mu :* (1d - mu))) :* 2
+        score(r0) := nullFit.score
+        score(r1) := X1.t * (y - (mu :* 2.0))
+        fisher(r0, r0) := inv(nullFit.vcov)
+        fisher(r0, r1) := (X0.t * (X1(::, *) :* (mu :* (1d - mu)))) :* 2.0
         fisher(r1, r0) := fisher(r0, r1).t
-        fisher(r1, r1) := X1.t * (X1(::, *) :* (mu :* (1d - mu))) :* 2
+        fisher(r1, r1) := (X1.t * (X1(::, *) :* (mu :* (1d - mu)))) :* 2.0
     }
 
     var iter = 1
@@ -73,8 +75,8 @@ class BinomRegressionModel(X: DenseMatrix[Double], y: DenseVector[Double]) {
           iter += 1
           b += deltaB
           mu := sigmoid(X * b)
-          score := X.t * (y - (mu :* 2))
-          fisher := X.t * (X(::, *) :* (mu :* (1d - mu))) :* 2
+          score := X.t * (y - (mu :* 2.0))
+          fisher := (X.t * (X(::, *) :* (mu :* (1d - mu)))) :* 2.0
         }
       } catch {
         case e: breeze.linalg.MatrixSingularException => exploded = true
@@ -83,28 +85,47 @@ class BinomRegressionModel(X: DenseMatrix[Double], y: DenseVector[Double]) {
     }
 
 
-    val logLkhd = (mu.toArray zip y.toArray foldLeft 0.0) { case (currentLogLikelihood, (p, n)) => currentLogLikelihood + Binomial(2, p).logProbabilityOf(n.toInt)}
+    val logLkhd = (mu.toArray zip y.toArray foldLeft 0.0) { case (currentLogLikelihood, (p, n)) => currentLogLikelihood + Binomial(2, p).logProbabilityOf(n.toInt) }
+    val vcov = inv(fisher)
 
-    BinomRegressionFit(b, Some(score), Some(fisher), logLkhd, iter, converged, exploded)
+    BinomRegressionFit(b, score, vcov, logLkhd, iter, converged, exploded)
+
+  }
+
+
+  object BinomRegressionFit {
+    val schema: TStruct = TStruct(
+      ("nIter", TInt),
+      ("converged", TBoolean),
+      ("exploded", TBoolean),
+      ("logLkhd", TDouble),
+      ("vcov", TArray(TDouble)),
+      ("b", TArray(TDouble)),
+      ("p", TInt))
+  }
+
+  case class BinomRegressionFit(b: DenseVector[Double],
+                                score: DenseVector[Double],
+                                vcov: DenseMatrix[Double],
+                                logLkhd: Double,
+                                nIter: Int,
+                                converged: Boolean,
+                                exploded: Boolean) {
+
+    private val scoreArray = score.data
+    private val bArray = b.data
+    private val vcovArray = vcov.toArray
+    private val p = bArray.length
+
+    def toAnnotation: Annotation = {
+      Annotation(nIter, converged, exploded, vcovArray, bArray, p)
+    }
+
+    def data = Seq(nIter, converged, exploded, logLkhd, vcovArray, bArray, p)
+
   }
 
 }
 
 
-object BinomRegressionFit {
-  val schema: Type = TStruct(
-    ("nIter", TInt),
-    ("converged", TBoolean),
-    ("exploded", TBoolean))
-}
 
-case class BinomRegressionFit(b: DenseVector[Double],
-                                  score: Option[DenseVector[Double]],
-                                  fisher: Option[DenseMatrix[Double]],
-                                  logLkhd: Double,
-                                  nIter: Int,
-                                  converged: Boolean,
-                                  exploded: Boolean) {
-
-  def toAnnotation: Annotation = Annotation(nIter, converged, exploded)
-}

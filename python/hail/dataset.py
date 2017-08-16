@@ -12,6 +12,9 @@ from hail.representation import Interval, Pedigree, Variant
 from hail.utils import Summary, wrap_to_list
 from hail.kinshipMatrix import KinshipMatrix
 from hail.ldMatrix import LDMatrix
+from hail.adaptivepca import AdaptivepcaBuilder
+from hail.regressionBinom import BinomRegressionBuilder
+from hail.project import ProjectBuilder
 
 warnings.filterwarnings(module=__name__, action='once')
 
@@ -2398,39 +2401,130 @@ class VariantDataset(object):
         return LDMatrix(jldm)
 
 
+
     @handle_py4j
     @requireTGenotype
-    @typecheck_method(subpop=strlike,
-                      root=strlike)
-    def fst(self, subpop, root='va.fst'):
-        jvds = self._jvdf.fst(subpop, root)
+    @typecheck_method(num_principals=integral,
+                      maximum_leafsize=integral,
+                      r2_threshold=numeric,
+                      min_maf=numeric,
+                      window_size=integral,
+                      outlier_threshold=nullable(numeric),
+                      maximum_iteration=nullable(integral),
+                      output_directory=nullable(strlike),
+                      save_score=bool)
+    def adaptivepca(self,
+                    num_principals,
+                    maximum_leafsize,
+                    r2_threshold = 0.5,
+                    min_maf = 0.01,
+                    window_size = 10000,
+                    outlier_threshold = None,
+                    maximum_iteration = None,
+                    output_directory = None,
+                    save_score = False):
+        aptpca  = self._jvdf.adaptivepca(num_principals,
+                                               maximum_leafsize,
+                                               r2_threshold,
+                                               min_maf,
+                                               window_size,
+                                               joption(outlier_threshold),
+                                               joption(maximum_iteration),
+                                               joption(output_directory),
+                                               save_score)
+        retval = AdaptivepcaBuilder(self.hc, aptpca._1())
+        return retval
+
+
+    @handle_py4j
+    @requireTGenotype
+    def binomRegression(self,
+                    adaptivepca,
+                    outputRoot = None):
+        jrep  = self._jvdf.simpleBinomRegression(adaptivepca._jrp, joption(outputRoot))
+        retval = BinomRegressionBuilder(self.hc, jrep)
+        return retval
+
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(inputDirectory=strlike,
+                      outputRoot=nullable(strlike))
+    def project(self, inputDirectory, outputRoot=None):
+        jrp = self._jvdf.project(inputDirectory, "root", joption(outputRoot))
+        retval = ProjectBuilder(self.hc, jrp)
+        return retval
+
+
+
+    @handle_py4j
+    @requireTGenotype
+    @typecheck_method(num_principals=integral,
+                      maximum_leafsize=integral,
+                      y_expression=strlike,
+                      sa_root=strlike,
+                      va_root=strlike,
+                      r2_threshol=numeric,
+                      window_size=integral,
+                      outlier_threshold=nullable(numeric),
+                      maximum_iteration=nullable(integral),
+                      output_directory=nullable(strlike),
+                      save_score=bool)
+    def treeCovLinearRegression(self,
+                                num_principals,
+                                maximum_leafsize,
+                                y_expression,
+                                sa_root,
+                                va_root,
+                                r2_threshold = 0.5,
+                                window_size = 10000,
+                                outlier_threshold = None,
+                                maximum_iteration = None,
+                                output_directory = None,
+                                save_score = False):
+        jvds = self._jvdf.treeCovLinearRegression(num_principals,
+                                              maximum_leafsize,
+                                              y_expression,
+                                              sa_root,
+                                              va_root,
+                                              r2_threshold,
+                                              window_size,
+                                              joption(outlier_threshold),
+                                              joption(maximum_iteration),
+                                              joption(output_directory),
+                                              save_score)
         return VariantDataset(self.hc, jvds)
 
 
     @handle_py4j
     @requireTGenotype
-    @typecheck_method(covariates=listof(strlike),
-                      rootSA=strlike,
-                      rootGA=strlike,
-                      n=integral,
-                      max_n=integral)
-    def kmeans(self, covariates=[], rootSA='sa.kmeans',rootGA='global.kmeans', n=-9, max_n=10):
-        jvds = self._jvdf.kmeans(jarray(Env.jvm().java.lang.String, covariates), rootSA, rootGA, n, max_n)
-        return VariantDataset(self.hc, jvds)
+    @typecheck_method(num_principals=integral,
+                      maximum_leafsize=integral,
+                      r2_threshold=numeric,
+                      window_size=integral,
+                      outlier_threshold=nullable(numeric),
+                      maximum_iteration=nullable(integral),
+                      output_directory=nullable(strlike),
+                      save_score=bool)
+    def simpleBinomRegression(self,
+                              num_principals,
+                              maximum_leafsize,
+                              r2_threshold = 0.5,
+                              window_size = 10000,
+                              outlier_threshold = None,
+                              maximum_iteration = None,
+                              output_directory = None,
+                              save_score = False):
+        self._jvdf.simpleBinomRegression(num_principals,
+                                           maximum_leafsize,
+                                           r2_threshold,
+                                           window_size,
+                                           joption(outlier_threshold),
+                                           joption(maximum_iteration),
+                                           joption(output_directory),
+                                           save_score)
+        return 0
 
-
-
-    @handle_py4j
-    @requireTGenotype
-    @typecheck_method(k=integral,
-                  scores=strlike,
-                  loadings=nullable(strlike),
-                  eigenvalues=nullable(strlike),
-                  min_keep=nullable(numeric))
-
-    def pca_with_outlier_removal(self, k=10, scores="sa.scores", loadings=None, eigenvalues=None, min_keep=None):
-        jvds = self._jvdf.pca_WithOutlierRemoval(k, scores, joption(loadings), joption(eigenvalues), joption(min_keep))
-        return VariantDataset(self.hc, jvds)
 
 
     @handle_py4j

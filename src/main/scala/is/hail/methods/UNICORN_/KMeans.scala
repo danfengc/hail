@@ -87,7 +87,7 @@ object Kmeans {
       if (N == -9) {
         val max = if (max_N < n) max_N else n
         val BIC = for {
-          i <- 2 to 10
+          i <- 2 to 3
           model = KMeans.train(covs, i, maxIterations = 1000)
           rss = model.computeCost(covs)
         } yield (rss + math.log(n) * nCovs * i, i)
@@ -95,12 +95,12 @@ object Kmeans {
       }
       else N
 
-    val model = new KMeans()
+    val model: KMeansModel = new KMeans()
       .setK(K)
       .run(covs)
 
-    val assignments: Map[Annotation, Annotation] = sampleMask
-      .zip(model.predict(covs).map(Annotation(_)).collect())
+    val assignments: Map[Annotation, Int] = sampleMask
+      .zip(model.predict(covs).collect())
       .toMap
 
     (K, assignments, model.clusterCenters)
@@ -113,7 +113,7 @@ object Kmeans {
               .toSeq)
     val sampleMask = scores.unzip._1.toIndexedSeq
     val n = covs.count().toInt
-    fit(covs, nCovs, n, sampleMask, N, max_N)
+    fit(covs, nCovs, n, sampleMask, N = 3, max_N)
   }
 
 

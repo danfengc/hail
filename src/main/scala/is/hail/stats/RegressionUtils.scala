@@ -4,7 +4,7 @@ import breeze.linalg._
 import is.hail.annotations.Annotation
 import is.hail.expr._
 import is.hail.utils._
-import is.hail.variant.{Genotype, VariantDataset}
+import is.hail.variant.{Genotype, Variant, VariantDataset}
 import org.apache.spark.sql.Row
 
 object RegressionUtils {
@@ -170,6 +170,23 @@ object RegressionUtils {
     } else
       None
   }
+
+  def normalizedHardCallsWithMaf(gs: Iterable[Genotype], p: Double, nSamples: Int, useHWE: Boolean = false, nVariants: Int = -1): Array[Double] = {
+    require(!(useHWE && nVariants == -1))
+    val mean = 2 * p
+    val stdDev = mean * (2 - mean) * nVariants / 2
+    val gtDict = Array(0, - mean / stdDev, (1 - mean) / stdDev, (2 - mean) / stdDev)
+    val vals = Array.ofDim[Double](nSamples)
+
+    var i = 0
+    while (i < nSamples) {
+      vals(i) = gtDict(vals(i).toInt + 1)
+      i += 1
+    }
+    vals
+
+  }
+
 
   def toDouble(t: Type, code: String): Any => Double = t match {
     case TInt => _.asInstanceOf[Int].toDouble

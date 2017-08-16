@@ -6,6 +6,9 @@ from hail.expr import *
 from hail.keytable import KeyTable
 from hail.kinshipMatrix import KinshipMatrix
 from hail.ldMatrix import LDMatrix
+from hail.adaptivepca import AdaptivepcaBuilder
+from hail.regressionBinom import BinomRegressionBuilder
+from hail.project import ProjectBuilder
 from hail.utils import hadoop_read, hadoop_write, hadoop_copy
 
 __all__ = ['HailContext',
@@ -42,5 +45,8 @@ __all__ = ['HailContext',
            'hadoop_copy',
            'KinshipMatrix',
            'LDMatrix',
+           'AdaptivepcaBuilder',
+           'BinomRegressionBuilder',
+           'ProjectBuilder',
            'representation',
            'expr']

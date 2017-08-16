@@ -2,7 +2,7 @@ from __future__ import print_function  # Python 2 and 3 print compatibility
 
 from hail.typecheck import *
 from pyspark import SparkContext
-from pyspark.sql import SQLContext
+from pyspark.sql import SQLContext, DataFrame
 
 from hail.dataset import VariantDataset
 from hail.expr import Type
@@ -117,6 +117,12 @@ class HailContext(object):
         :rtype: str
         """
         return self._jhc.version()
+
+
+    def inference(self, projectRoot, estAndCovarianceRoot, outputpath):
+        jrp = self._jhc.inference(projectRoot, estAndCovarianceRoot, outputpath)
+        return DataFrame(jrp, self._sql_context)
+
 
     @handle_py4j
     @typecheck_method(regex=strlike,

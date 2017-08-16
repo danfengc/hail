@@ -265,7 +265,7 @@ object IBD {
   private val (ibdSignature, ibdMerger) = TStruct(("i", TString), ("j", TString)).merge(ExtendedIBDInfo.signature)
   def toKeyTable(sc: HailContext, ibdMatrix: RDD[((Annotation, Annotation), ExtendedIBDInfo)]): KeyTable = {
     val ktRdd = ibdMatrix.map { case ((i, j), eibd) => ibdMerger(Annotation(i, j), eibd.toAnnotation).asInstanceOf[Row] }
-    KeyTable(sc, ktRdd, ibdSignature, Array("i", "j"))
+    KeyTable(hc = sc, rdd = ktRdd, signature = ibdSignature, key = Array("i", "j"))
   }
 
   private[methods] def generateComputeMaf(vds: VariantDataset, computeMafExpr: String): (Variant, Annotation) => Double = {
